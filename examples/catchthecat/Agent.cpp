@@ -2,33 +2,115 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <queue>
+#include <cmath>
 #include "World.h"
+
+#include <algorithm>
 using namespace std;
+
+// A* uses a priority queue with f-score (g + h)
+struct AStarNode {
+  Point2D position;
+  float fScore;  // g + h
+
+  bool operator>(const AStarNode& other) const {
+    return fScore > other.fScore;
+  }
+};
+
+float heuristic(const Point2D& from, const Point2D& to) {
+  int dx = abs(to.x - from.x);
+  int dy = abs(to.y - from.y);
+  // Hexagonal distance approximation
+  return dx + max(0, (dy - dx) / 2);
+}
+
 std::vector<Point2D> Agent::generatePath(World* w) {
-  unordered_map<Point2D, Point2D> cameFrom;  // to build the flowfield and build the path
-  queue<Point2D> frontier;                   // to store next ones to visit
-  unordered_set<Point2D> frontierSet;        // OPTIMIZATION to check faster if a point is in the queue
-  unordered_map<Point2D, bool> visited;      // use .at() to get data, if the element dont exist [] will give you wrong results
+  unordered_map<Point2D, Point2D> cameFrom;
+  unordered_map<Point2D, float> gScore;
+  priority_queue<AStarNode, vector<AStarNode>, greater<AStarNode>> openSet;
+  unordered_set<Point2D> openSetLookup;
+  unordered_set<Point2D> closedSet;
 
-  // bootstrap state
   auto catPos = w->getCat();
-  frontier.push(catPos);
-  frontierSet.insert(catPos);
-  Point2D borderExit = Point2D::INFINITE;  // if at the end of the loop we dont find a border, we have to return random points
+  int sideSize = w->getWorldSideSize();
+  int halfSize = sideSize / 2;
 
-  while (!frontier.empty()) {
-    // get the current from frontier
-    // remove the current from frontierset
-    // mark current as visited
-    // getVisitableNeightbors(world, current) returns a vector of neighbors that are not visited, not cat, not block, not in the queue
-    // iterate over the neighs:
-    // for every neighbor set the cameFrom
-    // enqueue the neighbors to frontier and frontierset
-    // do this up to find a visitable border and break the loop
+  gScore[catPos] = 0;
+
+  Point2D goalEstimate = catPos;
+  float minDistToBorder = INFINITY;
+
+  vector<Point2D> borderPoints;
+  for (int i = -halfSize; i <= halfSize; i++) {
+    borderPoints.push_back({-halfSize, i});
+    borderPoints.push_back({halfSize, i});
+    borderPoints.push_back({i, -halfSize});
+    borderPoints.push_back({i, halfSize});
   }
 
-  // if the border is not infinity, build the path from border to the cat using the camefrom map
-  // if there isnt a reachable border, just return empty vector
-  // if your vector is filled from the border to the cat, the first element is the catcher move, and the last element is the cat move
+  for (const auto& border : borderPoints) {
+    float dist = heuristic(catPos, border);
+    if (dist < minDistToBorder) {
+      minDistToBorder = dist;
+      goalEstimate = border;
+    }
+  }
+
+  openSet.push({catPos, heuristic(catPos, goalEstimate)});
+  openSetLookup.insert(catPos);
+
+  Point2D borderExit = Point2D::INFINITE;
+
+  while (!openSet.empty()) {
+
+    AStarNode current = openSet.top();
+    openSet.pop();
+    openSetLookup.erase(current.position);
+
+    if (w->catWinsOnSpace(current.position)) {
+      borderExit = current.position;
+      break;
+    }
+
+    closedSet.insert(current.position);
+
+    auto neighs = World::neighbors(current.position);
+
+    for (const auto& neighbor : neighs) {
+      if (!w->isValidPosition(neighbor) ||
+          w->getContent(neighbor) ||
+          closedSet.count(neighbor)) {
+        continue;
+      }
+
+      float tentativeGScore = gScore[current.position] + 1;
+
+      if (!gScore.count(neighbor) || tentativeGScore < gScore[neighbor]) {
+        cameFrom[neighbor] = current.position;
+        gScore[neighbor] = tentativeGScore;
+        float fScore = tentativeGScore + heuristic(neighbor, goalEstimate);
+
+        if (!openSetLookup.count(neighbor)) {
+          openSet.push({neighbor, fScore});
+          openSetLookup.insert(neighbor);
+        }
+      }
+    }
+  }
+
+  if (borderExit != Point2D::INFINITE) {
+    vector<Point2D> path;
+    Point2D current = borderExit;
+
+    while (cameFrom.count(current)) {
+      path.push_back(current);
+      current = cameFrom[current];
+    }
+
+    reverse(path.begin(), path.end());
+    return path;
+  }
+
   return vector<Point2D>();
 }
